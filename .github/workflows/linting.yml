@@ -1,1 +1,25 @@
+name: Linter
+
+on: push                      # 1. Trigger: run on every push, any branch
+
+jobs:
+  lint:                       # 2. One job, named "lint"
+    runs-on: ubuntu-latest    #    on a fresh Ubuntu machine from GitHub
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4     # 3. Copy repo onto that machine
+
+      - name: Set up Python
+        uses: actions/setup-python@v5 # 4. Install Python
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |                        # 5. Install the tools
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Run linter
+        run: ruff check .             # 6. Lint everything; any issue = failed run
 
