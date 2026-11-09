@@ -1,0 +1,135 @@
+# The pre-class manual setup (steps 2 and 3), as a playbook.
+# Run: ansible-playbook -i inventory.ini site.yml
+- name: Set up the database server
+  hosts: db
+  become: true
+  vars:
+    db_name: campus
+    db_user: campus
+    db_password: CampusPass123
+    app_private_ip: "{{ hostvars['app-server'].private_ip }}"
+
+  tasks:
+    - name: Install Postgres
+      ansible.builtin.apt:
+        name: [postgresql, python3-psycopg2, acl]
+        update_cache: true
+
+    - name: Start Postgres (it does not start on its own on these boxes)
+      ansible.builtin.service:
+        name: postgresql
+        state: started
+
+    - name: Find the Postgres version
+      ansible.builtin.command: ls /etc/postgresql
+      register: pg_versions
+      changed_when: false
+
+    - name: Listen on all interfaces
+      ansible.builtin.lineinfile:
+        path: "/etc/postgresql/{{ pg_versions.stdout_lines[0] }}/main/postgresql.conf"
+        regexp: "^#?listen_addresses"
+        line: "listen_addresses = '*'"
+      notify: Restart Postgres
+
+    - name: Allow the app server to connect
+      ansible.builtin.lineinfile:
+        path: "/etc/postgresql/{{ pg_versions.stdout_lines[0] }}/main/pg_hba.conf"
+        line: "host {{ db_name }} {{ db_user }} {{ app_private_ip }}/32 scram-sha-256"
+      notify: Restart Postgres
+
+    - name: Create the database user
+      community.postgresql.postgresql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+      become_user: postgres
+
+    - name: Create the database
+      community.postgresql.postgresql_db:
+        name: "{{ db_name }}"
+        owner: "{{ db_user }}"
+      become_user: postgres
+
+  handlers:
+    - name: Restart Postgres
+      ansible.builtin.service:
+        name: postgresql
+        state: restarted
+
+- name: Set up the app server
+  hosts: app
+  become: true
+  vars:
+    app_image: shinampeta/campus-event-notifier:v1
+    app_port: 8080
+    db_name: campus
+    db_user: campus
+    db_password: CampusPass123
+    db_private_ip: "{{ hostvars['db-server'].private_ip }}"
+
+  tasks:
+    - name: Install prerequisites
+      ansible.builtin.apt:
+        name: [ca-certificates, curl, python3-requests]
+        update_cache: true
+
+    - name: Create the apt keyrings folder
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Add Docker's GPG key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Add Docker's apt repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/docker.sources
+        mode: "0644"
+        content: |
+          Types: deb
+          URIs: https://download.docker.com/linux/ubuntu
+          Suites: {{ ansible_facts['distribution_release'] }}
+          Components: stable
+          Signed-By: /etc/apt/keyrings/docker.asc
+
+    - name: Install Docker
+      ansible.builtin.apt:
+        name: [docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin]
+        update_cache: true
+
+    - name: Start Docker (no systemd on these boxes, so this uses the init script)
+      ansible.builtin.service:
+        name: docker
+        state: started
+
+    - name: Wait for the Docker socket
+      ansible.builtin.wait_for:
+        path: /var/run/docker.sock
+
+    - name: Run the Campus Event Notifier
+      community.docker.docker_container:
+        name: campus-notifier
+        image: "{{ app_image }}"
+        restart_policy: unless-stopped
+        ports:
+          - "{{ app_port }}:8000"
+        env:
+          DB_ENGINE: postgres
+          POSTGRES_DB: "{{ db_name }}"
+          POSTGRES_USER: "{{ db_user }}"
+          POSTGRES_PASSWORD: "{{ db_password }}"
+          POSTGRES_HOST: "{{ db_private_ip }}"
+          POSTGRES_PORT: "5432"
+
+    - name: Wait until /health/ says ok
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ app_port }}/health/"
+        return_content: true
+      register: health
+      until: health.status == 200 and health.json.status == "ok"
+      retries: 15
+      delay: 3
