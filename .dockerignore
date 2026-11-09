@@ -5,3 +5,11 @@ __pycache__/
 db.sqlite3
 .env
 terraform/
+
+# Infrastructure and ops files never belong in the app image:
+# Terraform state can contain secrets, inventories name real hosts
+**/.terraform
+**/*.tfstate*
+terraform-lab/
+preclass/
+ansible/

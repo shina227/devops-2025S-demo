@@ -11,7 +11,9 @@ jobs:
   code:
     name: Code scan (Bandit)
     runs-on: ubuntu-latest
-    continue-on-error: true # warn for now; Drill 5 sets the threshold
+    # Policy: report every finding, block only on Medium+ severity AND Medium+ confidence.
+    # Low findings (e.g. B105) are often false positives: they stay visible in the
+    # report but do not block, so the gate stays trusted instead of being switched off.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,8 +21,10 @@ jobs:
           python-version: "3.12"
       - name: Install bandit
         run: python -m pip install --upgrade bandit
-      - name: Run bandit
-        run: bandit -r . -f screen
+      - name: Bandit report (all severities, never fails)
+        run: bandit -r . -f screen --exit-zero
+      - name: Bandit gate (Medium+ severity, Medium+ confidence)
+        run: bandit -r . -f screen -ll -ii
 
   secrets:
     name: Secret scan
@@ -40,13 +44,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build the image
-        run: docker build -t campus-notifier:dev .
+        run: docker build --pull -t campus-notifier:dev . # --pull: always start from the latest patched base
       - name: Trivy
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: campus-notifier:dev
-          severity: HIGH,CRITICAL
-          exit-code: "0" # warn for now; Drill 5 flips this
+          # Policy: a CRITICAL vulnerability with a published fix fails the build.
+          # Unfixed ones are reported in the register, since there is nothing to upgrade to yet.
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
           format: table
 
   iac:
@@ -60,4 +67,5 @@ jobs:
           directory: .
           framework: terraform
           quiet: true
-          soft_fail: true # warn for now; Drill 5 flips this to false
+          # Policy: any failed check blocks; accepted risks are suppressed in-line with checkov:skip + justification.
+          soft_fail: false
