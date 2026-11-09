@@ -11,6 +11,12 @@ resource "aws_ecr_repository" "devops_repo" {
     scan_on_push = true
   }
 
+  # Encrypt stored images with KMS (AWS-managed key) instead of the default AES-256 (CKV_AWS_136).
+  # Note: changing this on an already-created repository forces Terraform to replace it.
+  encryption_configuration {
+    encryption_type = "KMS"
+  }
+
   # Tags are good practice for organization
   tags = {
     Environment = "Testing"
